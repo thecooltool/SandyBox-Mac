@@ -29,87 +29,81 @@ Item {
     property ApplicationCommand command: applicationCommand
     property ApplicationFile file: applicationFile
     property ApplicationError error: applicationError
+    property ApplicationHelper helper: applicationHelper
     property ApplicationSettings settings: uiSettings
     property MdiHistory mdiHistory: mdiHistory
     property HomeAllAxesHelper homeAllAxesHelper: homeAllAxesHelper
     property Item notifications: null
     property string applicationName: "machinekit"
 
+    signal programReloaded()
+    signal programClosed()
+
     id: applicationCore
 
     Component.onCompleted: {
-        status.onTaskChanged.connect(statusTaskChanged)
-        status.onConfigChanged.connect(statusConfigChanged)
-        file.onUploadFinished.connect(fileUploadFinished)
-        error.onMessageReceived.connect(errorMessageReceived)
-        file.onErrorChanged.connect(fileError)
-        status.onErrorChanged.connect(statusError)
-        command.onErrorChanged.connect(commandError)
-        error.onErrorChanged.connect(errorError)
+        error.onMessageReceived.connect(_errorMessageReceived);
+        file.onErrorChanged.connect(_fileServiceError);
+        status.onErrorStringChanged.connect(_statusServiceError);
+        command.onErrorStringChanged.connect(_commandServiceError);
+        error.onErrorStringChanged.connect(_errorServiceError);
     }
 
-    function statusTaskChanged() {
-        checkFile()
+    QtObject {
+        id: d
+        readonly property string remoteFilePath: "file://" +  status.task.file
+        readonly property string remotePath: "file://" + status.config.remotePath
     }
 
-    function statusConfigChanged() {
-        applicationFile.remotePath = "file://" + status.config.remotePath
-        checkFile()
+    function executeProgram(remoteFilePath) {
+        if (status.task.taskMode !== ApplicationStatus.TaskModeAuto) {
+            command.setTaskMode('execute', ApplicationCommand.TaskModeAuto);
+        }
+        command.resetProgram('execute');
+        command.openProgram('execute', remoteFilePath);
     }
 
-    function checkFile() {
-        var remoteFile = "file://" + status.task.file
-        var remotePath = "file://" + status.config.remotePath
-        if ((remotePath !== "file://")
-                && (remoteFile !== "file://")
-                && (remoteFile.indexOf(remotePath) === 0)
-                && (file.remoteFilePath !== remoteFile))
-        {
-            file.remoteFilePath = remoteFile
-            file.startDownload()
+    function reloadProgram() {
+        executeProgram(file.remoteFilePath);
+        programReloaded();
+    }
+
+    function closeProgram() {
+        if (status.task.taskMode !== ApplicationStatus.TaskModeAuto) {
+            command.setTaskMode('execute', ApplicationCommand.TaskModeAuto);
+        }
+        command.resetProgram('execute');
+        programClosed();
+    }
+
+    function _errorMessageReceived(type, text) {
+        if (notifications !== null) {
+            notifications.addNotification(type, text);
         }
     }
 
-    function fileUploadFinished() {
-        if (status.task.taskMode !== ApplicationStatus.TaskModeAuto)
-            command.setTaskMode('execute', ApplicationCommand.TaskModeAuto)
-        if (status.task.file !== "") {
-            command.resetProgram('execute')
-        }
-        var fileName = file.localFilePath.split('/').reverse()[0]
-        var newPath = file.remotePath + '/' + fileName
-        file.remoteFilePath = newPath
-        command.openProgram('execute', newPath)
-    }
-
-    function errorMessageReceived(type, text) {
-        if (notifications != null) {
-            notifications.addNotification(type, text)
+    function _fileServiceError() {
+        if (file.error !== ApplicationFile.NoError) {
+            console.warn("file service error: " + file.errorString);
+            file.clearError();  // ignore errors from FTP
         }
     }
 
-    function fileError() {
-        if (file.error != ApplicationFile.NoError) {
-            console.log("file error: " + file.errorString)
-            file.clearError()  // ignore errors from FTP
+    function _statusServiceError(note) {
+        if (note !== "") {
+            console.warn("status service error: " + note);
         }
     }
 
-    function statusError() {
-        if (status.error != ApplicationStatus.NoError) {
-            console.log("status error: " + status.errorString)
+    function _commandServiceError(note) {
+        if (note !== "") {
+            console.warn("command service error: " + note);
         }
     }
 
-    function commandError() {
-        if (command.error != ApplicationCommand.NoError) {
-            console.log("command error: " + command.errorString)
-        }
-    }
-
-    function errorError() {
-        if (error.error != ApplicationError.NoError) {
-            console.log("error error: " + error.errorString)
+    function _errorServiceError(note) {
+        if (note !== "") {
+            console.warn("error service error: " + note);
         }
     }
 
@@ -137,25 +131,83 @@ Item {
     ApplicationStatus {
         id: applicationStatus
         statusUri: statusService.uri
-        ready: (statusService.ready || connected)
+        ready: (statusService.ready || statusSyncedQueue.output)
+    }
+
+    QueuedConnection {
+        id: statusSyncedQueue
+        input: applicationStatus.synced
     }
 
     ApplicationCommand {
         id: applicationCommand
         commandUri: commandService.uri
-        ready: (commandService.ready || connected)
+        ready: (commandService.ready || commandConnectedQueue.output)
+    }
+
+    QueuedConnection {
+        id: commandConnectedQueue
+        input: applicationCommand.connected
     }
 
     ApplicationError {
         id: applicationError
         errorUri: errorService.uri
-        ready: (errorService.ready || connected)
+        ready: (errorService.ready || errorConnectedQueue.output)
+    }
+
+    QueuedConnection {
+        id: errorConnectedQueue
+        input: applicationError.connected
     }
 
     ApplicationFile {
         id: applicationFile
         uri: fileService.uri
         ready: fileService.ready
+
+        onUploadFinished: {
+            fileSyncHandler.ignoreNextChange = true;
+            executeProgram(remoteFilePath);
+        }
+    }
+
+    ApplicationFileSyncHandler {
+        id: fileSyncHandler
+        ready: applicationFile.ready && applicationStatus.ready && applicationCommand.ready
+        remoteFilePath: d.remoteFilePath
+        remotePath: d.remotePath
+        ignoreNextChange: false
+
+        onStartFileDownload: {
+            applicationFile.remoteFilePath = filePath;
+            applicationFile.remotePath = remotePath;  // prevents race condition
+            applicationFile.startDownload();
+        }
+
+        onRemotePathChanged: {
+            // need to set remotePath if file is going to be uploaded from local computer
+            applicationFile.remotePath = d.remotePath;
+        }
+    }
+
+    FileWatcher {
+        id: fileWatcher
+        fileUrl: applicationFile.localFilePath
+        enabled: applicationFile.transferState === ApplicationFile.NoTransfer
+        recursive: false
+
+        onFileChanged: {
+            // file changes when program is running would cause problems on execution
+            if (status.synced && !status.running) {
+                applicationFile.startUpload();
+            }
+        }
+    }
+
+    ApplicationHelper {
+        id: applicationHelper
+        status: applicationStatus
     }
 
     ApplicationSettings {

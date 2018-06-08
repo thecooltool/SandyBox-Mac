@@ -29,63 +29,80 @@ Gauge {
     property alias core: object.core
     property alias file: object.file
     property alias status: object.status
-    property string _mode: getMode()
-    property string _fileName: object.file.remoteFilePath.split('/').reverse()[0]
+    property string _mode: __getMode()
+    readonly property string __fileName: object.file.remoteFilePath ? object.file.remoteFilePath.split('/').reverse()[0] : ""
+    property int __lastLine: 0
 
-    id: progressBar
-    value: getProgress()
+    id: root
+    value: __getProgress()
     fancy: false
     minimumValueVisible: false
     maximumValueVisible: false
     valueVisible: false
 
-    function getMode() {
+    QtObject {
+        id: d
+        readonly property int totalLines: status.synced ? status.task.totalLines : 1
+        readonly property int currentLine: status.synced ? status.motion.motionLine : 0
+        readonly property bool taskIsInReliableState: status.synced ? (status.task.execState === ApplicationStatus.TaskWaitingForMotion
+                                                                       || status.task.execState === ApplicationStatus.TaskDone) : false
+
+        property double progress: 0.0
+
+        onCurrentLineChanged: updateProgress()
+        onTotalLinesChanged: updateProgress()
+
+        function updateProgress() {
+            if (!taskIsInReliableState) {
+                return;
+            }
+
+            progress = (totalLines > 0 ? currentLine / totalLines : 0.0);
+        }
+    }
+
+    function __getMode() {
         if ((file !== undefined) && (file.transferState === ApplicationFile.UploadRunning)) {
-            return "upload"
+            return "upload";
         }
         else if ((file !== undefined) && (file.transferState === ApplicationFile.DownloadRunning)) {
-            return "download"
+            return "download";
         }
         else if (status.running) {
-            return "running"
+            return "running";
         }
         else {
-            return ""
+            return "";
         }
     }
 
-    function getText() {
-        if (_mode == "upload") {
-            return qsTr("Uploading file ") + file.localFilePath.split('/').reverse()[0]
+    function __getText() {
+        if (_mode === "upload") {
+            return qsTr("Uploading file %1").arg(file.localFilePath.split('/').reverse()[0]);
         }
-        else if (_mode == "download") {
-            return qsTr("Downloading file ") + file.remoteFilePath.split('/').reverse()[0]
+        else if (_mode === "download") {
+            return qsTr("Downloading file %1").arg(file.remoteFilePath.split('/').reverse()[0]);
         }
-        else if (_mode == "running") {
-            return (value * 100).toFixed(2) + "% - " + _fileName
+        else if (_mode === "running") {
+            return qsTr("%1% - %2").arg((value * 100).toFixed(2)).arg(__fileName);
         }
         else {
-            return _fileName
+            return __fileName;
         }
     }
 
-    function getProgress() {
-        if (_mode == "upload") {
-            return file.progress
+    function __getProgress() {
+        if (_mode === "upload") {
+            return file.progress;
         }
-        else if (_mode == "download") {
-            return file.progress
+        else if (_mode === "download") {
+            return file.progress;
         }
-        else if (_mode == "running") {
-            var totalLines = status.task.totalLines
-            var currentLine = status.motion.motionLine
-            if (currentLine > totalLines) {
-                currentLine = 0
-            }
-            return (totalLines > 0 ? currentLine / totalLines : 0.0)
+        else if (_mode === "running") {
+            return d.progress;
         }
         else {
-            return 0.0
+            return 0.0;
         }
     }
 
@@ -97,7 +114,7 @@ Gauge {
         verticalAlignment: Text.AlignVCenter
         horizontalAlignment: Text.AlignHCenter
         elide: Text.ElideRight
-        text: parent.getText()
+        text: parent.__getText()
     }
 
     TouchButton {
@@ -107,9 +124,9 @@ Gauge {
         anchors.top: parent.top
         width: visible ? height : 0
         iconSource: "qrc:Machinekit/Application/Controls/icons/dialog-cancel"
-        visible: (_mode == "upload") || (_mode == "download")
+        visible: (_mode === "upload") || (_mode === "download")
         onClicked: {
-            parent.file.abort()
+            parent.file.abort();
         }
     }
 

@@ -28,10 +28,28 @@ import Machinekit.Application 1.0
 RowLayout {
     property alias core: object.core
     property alias status: object.status
-    property int axis: axisGroup.currentIndex
-    property var axisNames: ["X", "Y", "Z", "A", "B", "C", "U", "V", "W"]
+    property alias helper: object.helper
+    property alias currentIndex: axisGroup.currentIndex
+    property int axis: 0
+    property var axisNames: helper.ready ? helper.axisNamesUpper: ["X", "Y", "Z"]
+    property var axisIndices: helper.ready ? helper.axisIndices: [0, 1, 2]
+
+    readonly property int __axes: axisNames.length
 
     id: root
+    enabled: status.synced
+
+    Binding {
+        target: root
+        property: "axis"
+        value: root.axisIndices[root.currentIndex]
+    }
+
+    Binding {
+        target: root
+        property: "currentIndex"
+        value: root.axisIndices.indexOf(root.axis)
+    }
 
     ExclusiveGroup {
         property int currentIndex: 0
@@ -39,15 +57,21 @@ RowLayout {
     }
 
     Repeater {
-        model: status.synced ? status.config.axes : 0
+        model: __axes
         RadioButton {
+            id: radioButton
             exclusiveGroup: axisGroup
             text: root.axisNames[index]
-            checked: index == 0
             onCheckedChanged: {
                 if (checked) {
-                    axisGroup.currentIndex = index
+                    axisGroup.currentIndex = index;
                 }
+            }
+
+            Binding {
+                target: radioButton
+                property: "checked"
+                value: index === axisGroup.currentIndex
             }
         }
     }

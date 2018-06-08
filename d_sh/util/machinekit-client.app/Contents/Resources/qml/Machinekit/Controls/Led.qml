@@ -20,7 +20,6 @@
 **
 ****************************************************************************/
 import QtQuick 2.0
-import Machinekit.Controls 1.0
 
 /*!
     \qmltype Led
@@ -112,7 +111,7 @@ Rectangle {
     border.width: 2
     radius: width/2
     border.color: "black"
-    color: ((value ^ invert) && (helpItem.blinkHelper || !blink))?onColor:offColor
+    color: ((value ^ invert) && (helpItem.blinkHelper || !blink)) ? onColor : offColor
     opacity: enabled ? 1.0 : 0.3
 
     Rectangle {
@@ -134,7 +133,7 @@ Rectangle {
         onTriggered: helpItem.blinkHelper = !helpItem.blinkHelper
     }
 
-    Item {
+    QtObject {
         id: helpItem
         property bool blinkHelper: true
     }

@@ -44,6 +44,8 @@ import Machinekit.Service 1.0
 */
 
 Rectangle {
+    default property alias data: container.data
+
     /*! This property holds the title of the application window.
     */
     property string title: "HAL Application Template"
@@ -55,13 +57,13 @@ Rectangle {
     */
     property alias name: remoteComponent.name
 
-    /*! \qmlproperty int heartbeadPeriod
+    /*! \qmlproperty int heartbeatInterval
 
-        This property holds the period time of the heartbeat timer in ms.
+        This property holds the interval time of the heartbeat timer in ms.
 
-        The default value is \c{3000}.
+        The default value is \c{2500}.
     */
-    property alias heartbeatPeriod: remoteComponent.heartbeatPeriod
+    property alias heartbeatInterval: remoteComponent.halrcmdHeartbeatInterval
 
     /*! \qmlproperty string halrcmdUri
 
@@ -83,7 +85,7 @@ Rectangle {
         Per default this property is set using the internal services
         if you want to overwrite the services set this property to \c true.
     */
-    property bool ready: remoteComponent.ready && _ready
+    property bool ready: remoteComponent.ready && __ready
 
     /*! \qmlproperty list<Service> services
 
@@ -126,51 +128,64 @@ Rectangle {
 
     /*! \internal */
     property var _requiredServices: {
-        var required = []
-        var newReady = true
+        var required = [];
+        var newReady = true;
         for (var i = 0; i < services.length; ++i) {
             if (services[i].required) {
-                required.push(services[i])
-                newReady = newReady && services[i].ready
-                services[i].onReadyChanged.connect(_evaluateReady)
+                required.push(services[i]);
+                newReady = newReady && services[i].ready;
+                services[i].onReadyChanged.connect(_evaluateReady);
             }
         }
 
-        _ready = newReady  // if no required service we are ready
+        __ready = newReady;  // if no required service we are ready
 
-        return required
+        return required;
     }
 
     /*! \internal */
-    property bool _ready: false
+    property bool __ready: false
+    /*! \internal */
+    property bool __initialized: false
+
+    /*!
+        Updates the services of this window.
+    */
+    function updateServices() {
+        var list = [];
+        var nestedList = _recurseObjects(root.data, "Service");
+        if (nestedList.length > 0) {
+            list = list.concat(nestedList);
+        }
+        root.services = list;
+    }
 
     /*! \internal */
     function _evaluateReady() {
         for (var i = 0; i < _requiredServices.length; ++i) {
             if (!_requiredServices[i].ready) {
-                _ready = false
-                return
+                __ready = false;
+                return;
             }
         }
 
-        _ready = true
-        return
+        __ready = true;
+        return;
     }
 
     /*! \internal */
     function _recurseObjects(objects, name)
     {
-        var list = []
+        var list = [];
 
         if (objects !== undefined) {
-            for (var i = 0; i < objects.length; ++i)
-            {
+            for (var i = 0; i < objects.length; ++i) {
                 if (objects[i].objectName === name) {
-                    list.push(objects[i])
+                    list.push(objects[i]);
                 }
-                var nestedList = _recurseObjects(objects[i].data, name)
+                var nestedList = _recurseObjects(objects[i].data, name);
                 if (nestedList.length > 0) {
-                    list = list.concat(nestedList)
+                    list = list.concat(nestedList);
                 }
             }
         }
@@ -183,17 +198,18 @@ Rectangle {
         Disconnects the service window if connected.
       */
     signal disconnect()
+    /*! \qmlsignal disconnect
+
+        Signals that the application is beeing shutdown.
+      */
+    signal shutdown()
 
     Component.onCompleted: {
-        var list = main.services
-        var nestedList = _recurseObjects(main.data, "Service")
-        if (nestedList.length > 0) {
-            list = list.concat(nestedList)
-        }
-        main.services = list
+        updateServices();
+        __initialized = true;
     }
 
-    id: main
+    id: root
 
     width: 500
     height: 800
@@ -208,14 +224,47 @@ Rectangle {
         id: dummyText
     }
 
+    Item {
+        id: container
+        anchors.fill: parent
+
+        Service {
+            id: halrcompService
+            type: "halrcomp"
+            required: true
+        }
+
+        Service {
+            id: halrcmdService
+            type: "halrcmd"
+            required: true
+        }
+
+        HalRemoteComponent {
+            id: remoteComponent
+
+            name: root.name
+            halrcmdUri: halrcmdService.uri
+            halrcompUri: halrcompService.uri
+            ready: root.__initialized && (halrcompService.ready && halrcmdService.ready) || remoteComponent.connected
+            containerItem: root
+        }
+    }
+
     Rectangle {
         id: discoveryPage
 
         anchors.fill: parent
         visible: false
-        z: 100
         color: systemPalette.window
 
+        Button {
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Screen.pixelDensity
+            text: qsTr("Back")
+            onClicked: root.disconnect()
+        }
 
         Label {
             id: connectingLabel
@@ -234,7 +283,7 @@ Rectangle {
 
             anchors.centerIn: parent
             running: true
-            height: parent.height * 0.15
+            height: Math.min(root.width, root.height) * 0.15
             width: height
         }
 
@@ -245,14 +294,19 @@ Rectangle {
             anchors.topMargin: Screen.pixelDensity
 
             Repeater {
-                model: main._requiredServices.length
+                model: root._requiredServices.length
 
                 CheckBox {
                     id: checkBox
-                    text: _requiredServices[index].type + qsTr(" service")
+                    text: qsTr("%1 service", "Required service").arg(_requiredServices[index].type)
                     checked: _requiredServices[index].ready
                 }
             }
+        }
+
+        MouseArea {
+            // steal the clicks from the check boxes
+            anchors.fill: serviceCheckColumn
         }
 
         Label {
@@ -265,44 +319,8 @@ Rectangle {
             horizontalAlignment: Text.AlignHCenter
             wrapMode: Text.WordWrap
             font.pointSize: dummyText.font.pointSize * 1.1
-            text: {
-                var headerText
-
-                switch (remoteComponent.error)
-                {
-                case HalRemoteComponent.BindError: headerText = qsTr("Bind rejected error:"); break;
-                case HalRemoteComponent.PinChange: headerText = qsTr("Pin change rejected error:"); break;
-                case HalRemoteComponent.CommandError: headerText = qsTr("Command error:"); break;
-                case HalRemoteComponent.SocketError: headerText = qsTr("Socket error:"); break;
-                default: headerText = qsTr("No error")
-                }
-
-                return headerText + "\n" + remoteComponent.errorString
-            }
+            text: qsTr("HAL component error:") + "\n" + remoteComponent.errorString
         }
-    }
-
-    Service {
-        id: halrcompService
-        type: "halrcomp"
-        required: true
-    }
-
-    Service {
-        id: halrcmdService
-        type: "halrcmd"
-        required: true
-    }
-
-    HalRemoteComponent {
-        id: remoteComponent
-
-        name: main.name
-        halrcmdUri: halrcmdService.uri
-        halrcompUri: halrcompService.uri
-        heartbeatPeriod: 3000
-        ready: (halrcompService.ready && halrcmdService.ready) || (remoteComponent.state === HalRemoteComponent.Connected)
-        containerItem: parent
     }
 
     /* This timer is a workaround to make the discoveryPage invisible in QML designer */
@@ -317,17 +335,17 @@ Rectangle {
 
     state: {
         switch (remoteComponent.connectionState) {
-        case HalRemoteComponent.Connected:
-            if (_ready)
-                return "connected"
-            else
-                return "disconnected"
+        case HalRemoteComponent.Synced:
+            if (__ready) {
+                return "connected";
+            }
+            else {
+                return "disconnected";
+            }
         case HalRemoteComponent.Error:
-                return "error"
-        case HalRemoteComponent.Timeout:
-            return "timeout"
+                return "error";
         default:
-            return "disconnected"
+            return "disconnected";
         }
     }
 
@@ -339,6 +357,7 @@ Rectangle {
             PropertyChanges { target: connectingIndicator; visible: true }
             PropertyChanges { target: serviceCheckColumn; visible: true }
             PropertyChanges { target: errorLabel; visible: false }
+            PropertyChanges { target: container; visible: false; enabled: false }
         },
         State {
             name: "error"
@@ -347,16 +366,17 @@ Rectangle {
             PropertyChanges { target: connectingIndicator; visible: false }
             PropertyChanges { target: serviceCheckColumn; visible: false }
             PropertyChanges { target: errorLabel; visible: true }
+            PropertyChanges { target: container; visible: false; enabled: false }
         },
         State {
             name: "timeout"
             PropertyChanges { target: discoveryPage; opacity: 0.0; enabled: false }
-            PropertyChanges { target: main; enabled: false }
+            PropertyChanges { target: container; visible: true; enabled: false }
         },
         State {
             name: "connected"
             PropertyChanges { target: discoveryPage; opacity: 0.0; enabled: false }
-            PropertyChanges { target: main; enabled: true }
+            PropertyChanges { target: container; visible: true; enabled: true }
         }
     ]
 

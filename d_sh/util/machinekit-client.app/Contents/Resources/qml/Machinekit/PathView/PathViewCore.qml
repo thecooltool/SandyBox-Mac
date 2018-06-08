@@ -28,51 +28,85 @@ import Machinekit.Application 1.0
 ApplicationItem {
     property alias gcodeProgramModel: gcodeProgramModel
     property alias gcodeProgramLoader: gcodeProgramLoader
+    property alias previewClient: previewClient
 
-    property bool _ready: file.ready
-    property bool _previewEnabled: settings.initialized && settings.values.preview.enable
+    /*! Updates the preview if a file is loaded. */
+    function updatePreview() {
+        if (file.remoteFilePath !== "file://") {
+            d.executePreview();
+        }
+    }
+
+    /*! Clears the preview part of the \l GCodeProgramModel. */
+    function clearPreview() {
+        gcodeProgramModel.clearPreview();
+    }
 
     id: pathViewCore
 
-    on_ReadyChanged: {
-        if (_ready) {
-            file.onUploadFinished.connect(fileUploadFinished)
-            file.onDownloadFinished.connect(fileDownloadFinished)
-        }
-    }
+    QtObject {
+        id: d
+        readonly property bool ready: file.ready
+        readonly property bool previewEnabled: settings.initialized && settings.values.preview.enable
 
-    function fileUploadFinished() {
-        gcodeProgramModel.clear()
-        gcodeProgramLoader.load()
-        if (_previewEnabled) {
-            executePreview()
+        /*! /internal
+            Cannot directly connect to slots since the file property is var and not a QObject.
+        */
+        onReadyChanged: {
+            if (ready) {
+                file.onUploadFinished.connect(onFileUploadFinished);
+                file.onDownloadFinished.connect(onFileDownloadFinished);
+                core.onProgramReloaded.connect(onProgramReloaded);
+                core.onProgramClosed.connect(onProgramClosed);
+            }
+            else {
+                file.onUploadFinished.disconnect(onFileUploadFinished);
+                file.onDownloadFinished.disconnect(onFileDownloadFinished);
+                core.onProgramReloaded.disconnect(onProgramReloaded);
+                core.onProgramClosed.connect(onProgramClosed);
+            }
         }
-    }
 
-    function fileDownloadFinished() {
-        gcodeProgramModel.clear()
-        gcodeProgramLoader.load()
-        if (_previewEnabled) {
-            executePreview()
+        function onFileUploadFinished() {
+            reloadModelAndPreview();
         }
-    }
 
-    on_PreviewEnabledChanged: {
-        if (_previewEnabled
-            && (file.remoteFilePath !== "")
-            && (file.localFilePath !== "")
-            && (file.transferState === ApplicationFile.NoTransfer))
-        {
-            gcodeProgramModel.clear()
-            gcodeProgramLoader.load()
-            executePreview()
+        function onFileDownloadFinished() {
+            reloadModelAndPreview();
         }
-    }
 
-    function executePreview() {
-        if (file.remoteFilePath.split('.').pop() === 'ngc') {   // only open ngc files
-            command.openProgram('preview', file.remoteFilePath)
-            command.runProgram('preview', 0)
+        function onProgramReloaded() {
+            reloadModelAndPreview();
+        }
+
+        function onProgramClosed() {
+            pathViewCore.clearPreview();
+        }
+
+        onPreviewEnabledChanged: {
+            if (previewEnabled
+                && (file.remoteFilePath !== "")
+                && (file.localFilePath !== "")
+                && (file.transferState === ApplicationFile.NoTransfer))
+            {
+                executePreview();
+            }
+        }
+
+        function reloadModelAndPreview() {
+            gcodeProgramModel.clear();
+            gcodeProgramLoader.load();
+            if (previewEnabled) {
+                executePreview();
+            }
+        }
+
+        function executePreview() {
+            if (file.remoteFilePath.split('.').pop() === 'ngc') {   // only open ngc files
+                gcodeProgramModel.clearPreview();
+                command.openProgram('preview', file.remoteFilePath);
+                command.runProgram('preview', 0);
+            }
         }
     }
 
@@ -86,23 +120,16 @@ ApplicationItem {
     }
 
     PreviewClient {
-        property bool _connected: false
-
         id: previewClient
-        statusUri: previewStatusService.uri
+        previewstatusUri: previewStatusService.uri
         previewUri: previewService.uri
-        ready: ((previewService.ready && previewStatusService.ready) || _connected)
+        ready: ((previewService.ready && previewStatusService.ready) || previewConnectedQueue.output)
         model: gcodeProgramModel
-        units: status.synced ? status.config.programUnits : PreviewClient.CanonUnitsInches
-
-        onConnectedChanged: delayTimer.running = true
     }
 
-    Timer { // workaround for binding loop
-        id: delayTimer
-        interval: 10
-        repeat: false
-        onTriggered: previewClient._connected = previewClient.connected
+    QueuedConnection {
+        id: previewConnectedQueue
+        input: previewClient.connected
     }
 
     GCodeProgramModel {
